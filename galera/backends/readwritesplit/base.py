@@ -170,7 +170,9 @@ class CursorWrapper:
                     ret = getattr(self._cursor, func.__name__)(*args, **kwargs)
                 self.add_history(item, args, kwargs, ret)
                 return ret
+
             return decor
+
         if hasattr(obj, '__call__'):
             obj = wrap(obj)
         else:
@@ -442,9 +444,9 @@ class DatabaseWrapper(base.DatabaseWrapper):
                 LOGGER.warning('Replaying %d cursors from failover history after %s' % (len(history), str(exc)))
 
                 if error_code in (
-                    '1180',  # Got error 6 "No such device or address" during COMMIT
-                    '2006',  # MySQL server has gone away
-                    '2013',  # Lost connection to MySQL server during query
+                        '1180',  # Got error 6 "No such device or address" during COMMIT
+                        '2006',  # MySQL server has gone away
+                        '2013',  # Lost connection to MySQL server during query
                 ):
                     time.sleep(self.reconnect_wait_time)
 
@@ -496,16 +498,22 @@ class DatabaseWrapper(base.DatabaseWrapper):
 
     def _wsrep_sync_wait(self):
         with self.secondary_wrapper.connection.cursor() as cursor:
-            cursor.execute(
-                'SET @lock_wait_timeout_orig = @@lock_wait_timeout;'
-                'SET @wsrep_sync_wait_orig = @@wsrep_sync_wait;'
-                'SET SESSION lock_wait_timeout = %s;'
-                'SET SESSION wsrep_sync_wait = 1;'
-                'SELECT 1;'
-                'SET SESSION lock_wait_timeout = @lock_wait_timeout_orig;'
-                'SET SESSION wsrep_sync_wait = @wsrep_sync_wait_orig;',
-                (self.wsrep_sync_timeout,)
-            )
+            try:
+                cursor.execute("SET @lock_wait_timeout_orig = @@lock_wait_timeout;")
+                cursor.execute("SET @wsrep_sync_wait_orig = @@wsrep_sync_wait;")
+                cursor.execute("SET SESSION lock_wait_timeout = %s;", (self.wsrep_sync_timeout,))
+                cursor.execute("SET SESSION wsrep_sync_wait = 1;")
+                cursor.execute("SELECT 1;")
+            except Exception as e:
+                # Log the error or handle the exception
+                LOGGER.error(f"An error occurred: {e}")
+            finally:
+                try:
+                    cursor.execute("SET SESSION lock_wait_timeout = @lock_wait_timeout_orig;")
+                    cursor.execute("SET SESSION wsrep_sync_wait = @wsrep_sync_wait_orig;")
+                except Exception as e:
+                    # Log the error or handle the exception if resetting the session variables fails
+                    LOGGER.error(f"An error occurred while resetting session variables: {e}")
 
     def _wsrep_sync_wait_upto_gtid(self):
         with self.connection.cursor() as primary_cursor:
@@ -515,11 +523,17 @@ class DatabaseWrapper(base.DatabaseWrapper):
         if primary_gtid.endswith('-0'):
             return
         with self.secondary_wrapper.connection.cursor() as secondary_cursor:
-            secondary_cursor.execute(
-                'SET @lock_wait_timeout_orig = @@lock_wait_timeout;'
-                'SET SESSION lock_wait_timeout = %s;'
-                'SELECT WSREP_SYNC_WAIT_UPTO_GTID(%s);'
-                'SET SESSION lock_wait_timeout = @lock_wait_timeout_orig;',
-                (self.wsrep_sync_timeout, primary_gtid,)
-            )
-            LOGGER.debug('Secondary sync upto %s' % primary_gtid)
+            try:
+                secondary_cursor.execute('SET @lock_wait_timeout_orig = @@lock_wait_timeout;')
+                secondary_cursor.execute('SET SESSION lock_wait_timeout = %s;', self.wsrep_sync_timeout)
+                secondary_cursor.execute('SELECT WSREP_SYNC_WAIT_UPTO_GTID(%s);', primary_gtid)
+                LOGGER.debug('Secondary sync upto %s' % primary_gtid)
+            except Exception as e:
+                # Log the error or handle the exception
+                LOGGER.error(f"An error occurred: {e}")
+            finally:
+                try:
+                    secondary_cursor.execute('SET SESSION lock_wait_timeout = @lock_wait_timeout_orig;')
+                except Exception as e:
+                    # Log the error or handle the exception if resetting the session variables fails
+                    LOGGER.error(f"An error occurred while resetting session variables: {e}")
